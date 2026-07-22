@@ -1,0 +1,15 @@
+- Database replication is implemented using master-slave , so whenever you use this term, you must use this master-slave as well, where only supports write and slaves read. If master fails then a slave will become master, so use these words together
+- you can use these strategies in sequence, as this is used in hte book -> vertical scaling, horizontal scaling, load balancer in horizontal scaling obv, replication, cache(and its algo), cdn, stateful and stateless architecture, data-centers, message-queue, logging and metrics and automations
+- replication done using master-slave, sharding done using shard key
+- normalizing data reduces data inconsistency but then we need to run join queries which is expensive
+- Rate limiting, can be implemented on server(server already has a lot of traffic, still we can implement there), middleware(best option, it is known as api gateway, it handles many stuff), client side(worst)
+- algorithms for rate limiting
+- for counters for rate limiting, we can store them in redis
+- since we keep counter of number of times api hit for the rate limiting in the redis, then this counter faces problems like race condition and sychronization issue in distributed systems. These issues are explained in detail in the book
+- what are sticky sessions?
+- where to put the rate-limiter? we know it is api gatway so after load-balancer, but before the servers, but different server will have different rate-limiter(api-gateway), so they need to be synced else user will first exahust server1 limit, then start using server2. So to do this we keep rate-limiting at server level only, but we keep a common storage, each rate-limiter uses same redis database
+- the problem with load balancer and sharding is if we add new server/databae, we need to reshard, and re-map, which leads to session lost , since now mod will be n+1, the solution is consistent hashing
+- consistent hashing-: instead of (hashing + modulo) of requestId, we just hash and plot it in a ring and find the nearest server anti-clockwise, no need for the modulo operation which was affecting keys
+- CAP theorem, P can not be ignored, so we have to choose between CP or AP
+- during designing of a key-value store(a database), we do replication in that db for availability, but that brings consistency issue, so quorrom concensus says W+R>N should be there for consitency
+
