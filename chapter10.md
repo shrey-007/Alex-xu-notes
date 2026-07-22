@@ -1,286 +1,234 @@
-# Design a Notification System
+# These are the notes for Chapter 10 - Designing a Notification System
 
-A notification system is a platform whose only responsibility is to reliably deliver information from a producer (service) to a user through multiple communication channels.
+This chapter looks simple because everyone has used notifications.
 
-Examples:
+But designing a notification system that sends **millions of notifications every day** is much harder than it looks.
 
-* Push notification (iOS, Android)
-* SMS
-* Email
+The mistake most people make is thinking this chapter is about Push Notifications.
 
-The notification system itself **does not deliver notifications directly**. It coordinates everything required to get the notification delivered by specialized providers like APNS, FCM, Twilio, SendGrid, etc.
+It is not.
+
+It is about **building a distributed system whose job is to reliably deliver messages to users through different communication channels.**
+
+Just like the Key-Value Store chapter, think of this chapter as **one continuous story**.
+
+Every new concept appears because the previous solution created a new problem.
 
 ---
 
-# Why do we even need a notification system?
+# Stage 1 - The simplest notification system
 
-Imagine every microservice sends notifications itself.
+Suppose your application only sends emails.
+
+Your architecture looks like this.
+
+```text
+Order Service
+
+        │
+        ▼
+
+Send Email()
+
+        │
+        ▼
+
+SMTP Server
+
+        │
+        ▼
+
+User
+```
+
+Whenever an order is placed,
 
 ```
-Order Service ---> APNS
-              ---> FCM
-              ---> Twilio
-              ---> Email Server
+Order Service
 
-Payment Service ---> APNS
-                ---> Twilio
+↓
 
-Marketing Service ---> APNS
-                  ---> Email
+sendEmail(user)
 ```
 
-Immediately many problems appear.
+Done.
 
-* Every service has to understand APNS.
-* Every service has to understand FCM.
-* Every service has to understand SMS providers.
-* Every service stores notification templates.
-* Every service manages retries.
-* Every service manages rate limits.
-* Every service tracks delivery.
-* Every service stores user preferences.
+Very simple.
 
-Every team duplicates the same code.
+---
 
-Now imagine changing SMS provider.
+## Problem #1
 
-Instead of changing one place...
+Now Product Team says
 
-...you modify 40 services.
+"We also need Push Notifications."
 
-This is terrible architecture.
+Your Order Service becomes
 
-So we introduce a dedicated Notification System.
+```text
+Order Service
+
+ ├── Email
+ ├── Push
+```
+
+Few weeks later
+
+Marketing says
 
 ```
-All Services
-      |
-      |
+Need SMS.
+```
+
+Now
+
+```text
+Order Service
+
+ ├── Email
+ ├── Push
+ ├── SMS
+```
+
+Another month later
+
+```
+Need WhatsApp Notifications.
+```
+
+Now
+
+```text
+Order Service
+
+ ├── Email
+ ├── Push
+ ├── SMS
+ ├── WhatsApp
+```
+
+Every business service now needs to understand every notification channel.
+
+Imagine having
+
+```
+20 microservices
+```
+
+Each one now contains
+
+* Email logic
+* Push logic
+* SMS logic
+* Retry logic
+* Authentication
+* Analytics
+
+Huge duplication.
+
+---
+
+## Solution
+
+Separate notification logic.
+
+Create one Notification Service.
+
+```
+Order Service
+Billing Service
+Marketing Service
+Inventory Service
+
+        │
+        │
+        ▼
+
 Notification Service
-      |
- ----------------------------
- |      |        |          |
-APNS   FCM    Twilio   SendGrid
+
+        │
+        ▼
+
+Users
 ```
 
 Now every service simply says
 
-> "Send this notification."
+```
+Send Notification
+```
 
-The notification system handles everything else.
+The Notification Service decides
 
----
-
-# What are the requirements?
-
-From the chapter requirements:
-
-Supports
-
-* Push notifications
+* Push
 * SMS
 * Email
 
-Must be
-
-* Near real-time
-* Millions of notifications/day
-* Multiple devices
-* Triggered by applications or scheduled jobs
-* Users can opt out
-
-These requirements drive the entire design.
-
-Notice how every later design decision comes from one of these requirements.
+This is the **real beginning** of the chapter.
 
 ---
 
-# High Level Design
+# Stage 2 - Notification Service still cannot send notifications
 
-Before discussing servers, understand the complete lifecycle.
-
-```
-Business Event
-
-↓
-
-Notification Request
-
-↓
-
-Notification Processing
-
-↓
-
-Notification Delivery
-
-↓
-
-User Receives Notification
-```
-
-Everything in the chapter is simply expanding each stage.
-
----
-
-# Step 1 — Notification Generation
-
-Something must happen before a notification exists.
-
-Examples
+Suppose someone says
 
 ```
-Order Placed
-
-↓
-
-Send Confirmation Email
-```
-
-```
-Payment Failed
-
-↓
-
-Send SMS
-```
-
-```
-Package Out for Delivery
-
-↓
-
-Push Notification
-```
-
-```
-Breaking News
-
-↓
-
 Send Push Notification
 ```
 
-These systems are called **notification producers**.
+Can your Notification Service directly send data to an iPhone?
 
-The chapter calls them
+No.
 
-```
-Service 1
-Service 2
-...
-Service N
-```
+Apple does not allow that.
 
-These are simply business services.
+Similarly,
 
-They do NOT send notifications.
+Android also doesn't allow that.
 
-They only request them.
+SMS also doesn't.
 
----
+Email also doesn't.
 
-# Step 2 — Different notification channels
-
-Now the notification system decides
-
-Which channel?
-
-Because every channel works differently.
+Every communication channel has its own delivery network.
 
 ---
 
-# iOS Push Notification
+## iOS
 
-Apple controls iPhones.
-
-You cannot directly send notifications to an iPhone.
-
-Instead
+Apple provides
 
 ```
-Your Server
+APNS
+
+Apple Push Notification Service
+```
+
+Flow
+
+```
+Notification Service
 
 ↓
 
-Apple Push Notification Service (APNS)
+APNS
 
 ↓
 
 iPhone
 ```
 
-Apple acts as a delivery network.
+Your server never talks directly to the phone.
+
+Apple delivers it.
 
 ---
 
-## Device Token
-
-Question:
-
-How does APNS know which phone?
-
-Answer:
-
-Every installation generates
-
-```
-Device Token
-```
-
-Think of it as
-
-```
-House Address
-```
-
-Without address
-
-Courier cannot deliver.
-
-Without device token
-
-APNS cannot deliver.
-
----
-
-# Payload
-
-Payload contains
-
-```
-Title
-
-Body
-
-Badge
-
-Sound
-
-Custom Data
-```
-
-Example
-
-```
-{
- title:"Order Delivered",
- body:"Your order has arrived",
- orderId:123
-}
-```
-
-APNS receives this payload.
-
-It pushes it to the phone.
-
----
-
-# Android
+## Android
 
 Exactly same idea.
 
-Instead of APNS
+Instead of APNS,
 
 Google provides
 
@@ -293,7 +241,7 @@ Firebase Cloud Messaging
 Flow
 
 ```
-Notification Server
+Notification Service
 
 ↓
 
@@ -301,26 +249,36 @@ FCM
 
 ↓
 
-Android Device
+Android Phone
 ```
-
-Same concept.
-
-Different provider.
 
 ---
 
-# SMS
+## SMS
 
-Unlike push notifications,
+Phones don't expose APIs.
 
-phones don't expose APIs.
+Telecom companies don't expose APIs.
 
-Instead companies use SMS gateways.
+Instead,
+
+companies use SMS Gateways.
 
 Example
 
 ```
+Twilio
+
+Nexmo
+```
+
+Flow
+
+```
+Notification Service
+
+↓
+
 Twilio
 
 ↓
@@ -332,128 +290,146 @@ Mobile Network
 Phone
 ```
 
-Your server never talks to telecom operators.
-
-Twilio does.
-
 ---
 
-# Email
+## Email
 
-Same story.
+Email is also similar.
 
-Sending email yourself is difficult.
+Companies usually don't maintain email infrastructure.
 
-Problems
-
-* Spam detection
-* Blacklisting
-* DKIM
-* SPF
-* Bounce handling
-* Analytics
-
-Instead use
+Instead they use
 
 ```
 SendGrid
 
-MailChimp
-
 Amazon SES
+
+MailChimp
 ```
 
-Again
+Flow
 
-Your notification system delegates delivery.
+```
+Notification Service
 
----
+↓
 
-# Observation
+Email Provider
 
-Every notification channel has
+↓
 
-Different API
-
-Different authentication
-
-Different retry
-
-Different limits
-
-Different response format
-
-So the notification system acts as a common abstraction.
-
-Business services never care whether it's APNS or Twilio.
+Recipient
+```
 
 ---
 
-# Contact Information Collection
+### Important Observation
 
-Now another question appears.
+Notice something.
 
-How do we know
+Every channel has
 
-where to send notifications?
+* Different API
+* Different Authentication
+* Different Payload
+* Different Retry Logic
+* Different Limits
 
-Suppose Order Service wants to notify User 123.
+The Notification Service hides all these differences.
 
-How does Notification System know
-
-* phone number?
-* email?
-* device token?
-
-It needs contact information.
+Business Services don't know anything about APNS or Twilio.
 
 ---
 
-# When is contact information collected?
+# Stage 3 - How do we know where to send notifications?
 
-When user
+Suppose Order Service says
 
-* signs up
+```
+Notify User 123
+```
+
+Question
+
+Where?
+
+```
+Email?
+
+Phone?
+
+Device?
+
+```
+
+Notification Service doesn't know.
+
+It only has
+
+```
+User ID
+```
+
+It needs user contact information.
+
+---
+
+## Solution
+
+Collect user information during registration.
+
+Whenever a user
+
 * installs app
+* signs up
 * logs in
 
-The API server stores
+store
 
 ```
 Email
 
 Phone Number
 
-Device Tokens
+Device Token
 ```
 
 ---
 
-# Database Design
-
-User Table
+## Database
 
 ```
-User ID
+User Table
+
+-----------------
+
+UserID
 
 Email
 
 Phone Number
 ```
 
-Device Table
+Another table
 
 ```
-Device ID
+Device Table
 
-User ID
+-----------------
+
+DeviceID
+
+UserID
 
 Platform
 
 Device Token
 ```
 
-Why separate tables?
+---
+
+### Why two tables?
 
 Because
 
@@ -463,45 +439,29 @@ One user
 
 Many devices
 
-Example
-
 ```
+Laptop
+
 iPhone
 
-iPad
-
 Android Tablet
+
+iPad
 ```
 
-If device token were inside User table
+If Device Token were inside User table,
 
-Only one token could exist.
+only one device could exist.
 
-Normalization solves this.
-
-```
-User
-
-↓
-
-Device1
-
-↓
-
-Device2
-
-↓
-
-Device3
-```
-
-Now push notification goes to every device.
+Separate Device table solves it.
 
 ---
 
-# Initial Notification Flow
+# Stage 4 - One Notification Server
 
-The book first proposes a simple architecture.
+Everything looks good.
+
+Architecture
 
 ```
 Business Services
@@ -512,47 +472,66 @@ Notification Server
 
 ↓
 
-Third Party Services
+APNS
 
-↓
+FCM
 
-Users
+Twilio
+
+SendGrid
 ```
 
-Simple.
+Looks perfect.
 
-Easy.
+Works perfectly.
 
-Works.
-
-But...
-
-Only for small scale.
+Until scale arrives.
 
 ---
 
-# Responsibilities of Notification Server
+# Problem #2
 
-It
+Suppose your application grows.
 
-* receives request
-* validates request
-* builds payload
-* contacts providers
-* waits for response
+Daily notifications
 
-Everything happens here.
+```
+10 Million Push
 
-This simplicity causes future problems.
+5 Million Emails
+
+1 Million SMS
+```
+
+One Notification Server must
+
+* Validate request
+* Query database
+* Read templates
+* Build HTML Email
+* Build Push Payload
+* Call APNS
+* Wait for APNS
+* Call Twilio
+* Wait for Twilio
+* Retry failures
+
+Everything happens on one machine.
+
+CPU becomes busy.
+
+Threads become blocked.
+
+Latency increases.
 
 ---
 
-# Problem 1 — Single Point of Failure
+## Problem #3
 
-Only one notification server exists.
+Single Point of Failure.
 
 ```
-Service
+Business Services
 
 ↓
 
@@ -563,234 +542,53 @@ Notification Server
 Users
 ```
 
-If server dies
+Notification Server crashes.
 
-Entire notification system dies.
+Everything stops.
 
-No push.
-
-No SMS.
-
-No Email.
-
-Complete outage.
+No notification reaches anyone.
 
 ---
 
-# Problem 2 — Difficult to Scale
+## Solution
 
-Suppose suddenly
-
-Black Friday Sale.
+Horizontal Scaling.
 
 Instead of
 
 ```
-100 notifications/sec
+1 Notification Server
 ```
 
-Now
+Run
 
 ```
-50,000 notifications/sec
+Load Balancer
+
+      │
+
+────────────────────
+
+│      │      │
+
+N1     N2     N3
 ```
 
-One notification server now must
-
-* query database
-* fetch templates
-* contact APNS
-* contact Twilio
-* contact SendGrid
-* build HTML emails
-* process retries
-
-One machine cannot keep growing forever.
-
-Vertical scaling eventually reaches hardware limits.
-
----
-
-# Problem 3 — Performance Bottleneck
-
-Different notification types have different speeds.
-
-Push
-
-```
-20 ms
-```
-
-Email
-
-```
-500 ms
-```
-
-HTML generation
-
-```
-300 ms
-```
-
-Waiting for provider
-
-```
-1 second
-```
-
-One slow email blocks everything.
-
-Eventually
-
-CPU
-
-Memory
-
-Threads
-
-Connections
-
-all become bottlenecks.
-
----
-
-# Improved Design
-
-Instead of one overloaded server
-
-Break responsibilities apart.
-
-This is classic distributed system thinking.
-
-```
-Producer
-
-↓
-
-Notification Server
-
-↓
-
-Queue
-
-↓
-
-Workers
-
-↓
-
-Provider
-
-↓
-
-User
-```
-
-Every box has one responsibility.
-
----
-
-# Database and Cache moved out
-
-Instead of embedding storage
-
-```
-Notification Server
-
-↓
-
-Database
-```
-
-becomes
-
-```
-Notification Servers
-
-↓
-
-Shared Database
-```
-
-Now many notification servers can run.
-
----
-
-# Horizontal Scaling
-
-Earlier
-
-```
-1 Server
-```
-
-Now
-
-```
-LB
-
-↓
-
-Notification 1
-
-Notification 2
-
-Notification 3
-
-Notification 4
-```
-
-Traffic spreads.
+Now traffic gets distributed.
 
 Need more capacity?
 
-Add servers.
-
-No code changes.
+Add more servers.
 
 ---
 
-# Why Cache?
+# Stage 5 - Another problem appears
 
-Notification processing repeatedly needs
+Even after adding more Notification Servers,
 
-* user info
-* device token
-* templates
-* notification settings
+one issue still remains.
 
-Reading DB every time becomes expensive.
-
-Instead
-
-```
-Notification Server
-
-↓
-
-Cache
-
-↓
-
-Database
-```
-
-Most reads hit cache.
-
-Benefits
-
-* lower latency
-* lower DB load
-* better throughput
-
----
-
-# Why Message Queue?
-
-This is the most important improvement.
-
-Without queue
+Suppose Notification Server sends notification.
 
 ```
 Notification Server
@@ -800,11 +598,29 @@ Notification Server
 APNS
 ```
 
-Server waits.
+APNS takes
 
-Cannot continue.
+```
+700 milliseconds
+```
 
-With queue
+During that time
+
+Notification Server waits.
+
+It cannot process other notifications.
+
+Thousands of requests pile up.
+
+Notification Servers become blocked.
+
+---
+
+## Solution
+
+Message Queue.
+
+Instead of sending immediately
 
 ```
 Notification Server
@@ -822,17 +638,55 @@ Worker
 APNS
 ```
 
-Notification server immediately returns.
+Notification Server simply stores event inside Queue.
 
-Worker handles slow work later.
+Returns immediately.
 
-This is called **asynchronous processing**.
+Worker performs slow work.
+
+This is called
+
+```
+Asynchronous Processing
+```
+
+This is probably the biggest improvement in the chapter.
 
 ---
 
-# Why separate queues?
+# Stage 6 - Why multiple queues?
 
-The chapter gives
+Suppose there is only one queue.
+
+```
+Notification Queue
+```
+
+Now
+
+Twilio crashes.
+
+SMS messages cannot leave queue.
+
+Queue fills.
+
+Soon
+
+Email Notifications
+
+also wait behind SMS.
+
+Push Notifications
+
+also wait.
+
+Entire system slows down.
+
+---
+
+## Solution
+
+Separate queues.
 
 ```
 Push Queue
@@ -842,107 +696,33 @@ SMS Queue
 Email Queue
 ```
 
-Instead of
+Now
+
+If Twilio fails
+
+Only
 
 ```
-One Queue
+SMS Queue
 ```
 
-Why?
+grows.
 
-Suppose
+Push continues.
 
-Twilio goes down.
+Email continues.
 
-SMS workers stop.
-
-If everything shares one queue
-
-SMS backlog fills queue.
-
-Push notifications also get delayed.
-
-Entire system slows.
-
-Separate queues isolate failures.
-
-```
-SMS Failure
-
-↓
-
-Only SMS Queue grows
-
-↓
-
-Push Queue unaffected
-
-↓
-
-Email Queue unaffected
-```
-
-This is fault isolation.
+Failures become isolated.
 
 ---
 
-# Workers
+# Stage 7 - Workers
 
-Workers continuously poll queues.
+Someone has to consume queues.
 
-```
-while(true)
-
-↓
-
-Read Queue
-
-↓
-
-Send Notification
-
-↓
-
-Acknowledge
-```
-
-Need more throughput?
-
-Add workers.
-
-Simple horizontal scaling.
-
----
-
-# Complete Improved Flow
-
-Everything now connects naturally.
+Introduce Workers.
 
 ```
-Business Service
-
-↓
-
-Notification API
-
-↓
-
-Validation
-
-↓
-
-Fetch User
-
-↓
-
-Fetch Template
-
-↓
-
-Fetch Settings
-
-↓
-
 Queue
 
 ↓
@@ -952,54 +732,72 @@ Worker
 ↓
 
 Provider
+```
+
+Worker continuously does
+
+```
+while(true)
+
+{
+
+Read Queue
+
+Send Notification
+
+Delete Message
+
+}
+```
+
+Need more throughput?
+
+Simply add more workers.
+
+```
+Push Queue
 
 ↓
 
-User
+Worker1
+
+Worker2
+
+Worker3
+
+Worker4
 ```
 
-Every step exists because the previous step alone wasn't enough.
+Very easy horizontal scaling.
 
 ---
 
-# Reliability
+# Stage 8 - What if worker crashes?
 
-Distributed systems fail.
+Imagine
 
-Provider fails.
+Worker removes notification from queue.
 
-Worker crashes.
+Before sending,
 
-Network breaks.
+machine crashes.
 
-Database unavailable.
+Notification disappears forever.
 
-So reliability becomes critical.
+Customer never receives OTP.
+
+Very dangerous.
 
 ---
 
-# Preventing Data Loss
+## Solution
 
-Requirement
+Persist notifications.
 
-Notifications may be delayed.
-
-But
-
-Must never disappear.
-
-Suppose worker crashes after dequeuing.
-
-Without persistence
-
-Notification gone forever.
-
-Solution
-
-Store notification event.
+Store every notification before processing.
 
 ```
-Notification Created
+Notification Request
 
 ↓
 
@@ -1014,76 +812,126 @@ Queue
 Worker
 ```
 
-Now even if queue loses message
+Now
 
-Database still contains original event.
+Even if queue loses message,
 
-Recovery possible.
+database still contains original event.
+
+Notification can be recovered.
+
+This gives reliability.
 
 ---
 
-# Exactly Once Delivery
+# Stage 9 - Third-party providers fail
 
-Can we guarantee
+Suppose
 
 ```
-Exactly once?
+APNS
+
+↓
+
+Unavailable
 ```
+
+Should we immediately fail?
 
 No.
 
-Because failures happen between every network call.
-
-Example
-
-Worker sends notification.
-
-Provider receives it.
-
-Provider sends success response.
-
-Network breaks.
-
-Worker never receives response.
-
-Worker thinks
-
-"Failed."
-
-Retries.
-
-User gets duplicate.
-
-Distributed systems cannot perfectly distinguish
-
-```
-Did provider receive?
-
-OR
-
-Did response disappear?
-```
-
-Impossible in general.
+Failures are often temporary.
 
 ---
 
-# Deduplication
+## Solution
 
-Instead of perfect guarantee
+Retry Mechanism.
 
-Reduce duplicates.
+```
+Attempt 1
 
-Every notification has
+↓
+
+Fail
+
+↓
+
+Wait
+
+↓
+
+Attempt 2
+
+↓
+
+Fail
+
+↓
+
+Wait
+
+↓
+
+Attempt 3
+
+↓
+
+Success
+```
+
+Most temporary failures disappear after retry.
+
+---
+
+# Stage 10 - Retries create another problem
+
+Imagine
+
+Worker sends notification.
+
+APNS receives it.
+
+APNS sends success response.
+
+Network fails before response reaches Worker.
+
+Worker thinks
+
+```
+Notification Failed.
+```
+
+Retries.
+
+User receives
+
+```
+Two notifications.
+```
+
+Distributed systems cannot guarantee
+
+```
+Exactly Once Delivery.
+```
+
+---
+
+## Solution
+
+Deduplication.
+
+Every notification gets
 
 ```
 Event ID
 ```
 
-Worker checks
+Whenever Worker processes notification
 
 ```
-Seen?
+Already Seen?
 
 ↓
 
@@ -1095,31 +943,49 @@ Discard
 
 No
 
-Process
+Send
 ```
 
-Duplicate retries become harmless.
+Duplicates reduce significantly.
+
+Exactly-once delivery is practically impossible in distributed systems, so we settle for **at-least-once delivery with deduplication**.
 
 ---
 
-# Notification Templates
+# Stage 11 - Millions of notifications look identical
 
-Millions of notifications have same format.
-
-Instead of
-
-building entire notification every time
-
-Store template.
+Imagine sending
 
 ```
-Hello {name}
+Your order has shipped.
 
-Your order {orderId}
+```
+
+to
+
+```
+10 million users.
+```
+
+Building message every time wastes CPU.
+
+---
+
+## Solution
+
+Templates.
+
+Store
+
+```
+Hello {Name}
+
+Your Order {OrderID}
+
 has shipped.
 ```
 
-Runtime becomes
+At runtime
 
 ```
 Template
@@ -1135,19 +1001,36 @@ Final Notification
 
 Benefits
 
-* consistency
-* easier maintenance
-* fewer mistakes
-* localization
-* faster generation
+* Faster
+* Consistent
+* Easier localization
+* Easier maintenance
 
 ---
 
-# Notification Settings
+# Stage 12 - Users get irritated
 
-Users don't want every notification.
+Suppose Marketing sends
 
-Store preferences.
+```
+20 Push Notifications
+
+10 Emails
+
+8 SMS
+```
+
+every day.
+
+Users uninstall app.
+
+---
+
+## Solution
+
+Notification Settings.
+
+Store
 
 ```
 User
@@ -1156,12 +1039,12 @@ User
 
 Push = Yes
 
-SMS = No
+Email = No
 
-Email = Yes
+SMS = Yes
 ```
 
-Before queueing
+Before sending
 
 Notification Server checks
 
@@ -1178,165 +1061,170 @@ Continue
 
 No
 
-Drop
+Discard
 ```
 
-No unnecessary provider calls.
-
-Better user experience.
+Users remain in control.
 
 ---
 
-# Rate Limiting
+# Stage 13 - Even opted-in users can be spammed
 
-Suppose buggy service generates
+Suppose user has opted in.
 
-```
-10,000 notifications
-```
-
-for same user.
-
-Without limit
-
-User receives
+Marketing accidentally sends
 
 ```
-10,000 pushes
+500 notifications.
 ```
 
-Probably uninstalls app.
+Opt-in won't stop it.
 
-Rate limiter protects users.
+Need another protection.
+
+---
+
+## Solution
+
+Rate Limiting.
 
 Example
 
 ```
 Maximum
 
-5 promotional notifications/day
+5 Promotional Pushes
+
+per day
 ```
 
-System simply rejects excess.
+Additional notifications are rejected or delayed.
+
+This protects users from spam and protects providers from unnecessary traffic.
 
 ---
 
-# Retry Mechanism
+# Stage 14 - Anyone can call Notification API
 
-Provider unavailable.
-
-Should we fail forever?
-
-No.
-
-Worker
+Imagine
 
 ```
-Attempt 1
+POST
 
-↓
-
-Fail
-
-↓
-
-Queue Again
-
-↓
-
-Attempt 2
-
-↓
-
-Fail
-
-↓
-
-Attempt 3
-
-↓
-
-Success
+/sendNotification
 ```
 
-After maximum retries
+is public.
 
-Generate alert.
+Attackers send
 
-Developers investigate.
+```
+50 million notifications.
+```
+
+Huge disaster.
 
 ---
 
-# Authentication
+## Solution
 
-Anyone should not send notifications.
-
-Otherwise attackers could spam users.
-
-Notification APIs are protected.
+Authentication.
 
 Only trusted internal services
 
-or authenticated clients
+or verified clients
 
-can call
+can call Notification APIs.
+
+For Push Providers,
+
+credentials like
 
 ```
-POST /send
+App Key
+
+App Secret
 ```
+
+are also required.
 
 ---
 
-# Monitoring Queue
+# Stage 15 - How do we know system is healthy?
 
-Queue length tells system health.
-
-Small queue
+Suppose Queue contains
 
 ```
-Workers keeping up.
+20 million messages.
 ```
 
-Growing queue
+Nobody notices.
+
+Users receive notifications
+
+after
 
 ```
-Workers too slow.
+6 hours.
 ```
 
-Very large queue
-
-```
-Need more workers.
-
-OR
-
-Provider slow.
-
-OR
-
-Worker failure.
-```
-
-Queue size becomes an important operational metric.
+Need monitoring.
 
 ---
 
-# Event Tracking
+## Solution
 
-Delivery alone isn't enough.
-
-Business wants answers.
-
-Did user
-
-* receive?
-* open?
-* click?
-* purchase?
-
-Notification system emits events.
+Monitor queue length.
 
 ```
+Queue Size
+
+↓
+
+Growing?
+
+↓
+
+Workers insufficient
+
+↓
+
+Add more Workers
+```
+
+Queue depth becomes one of the most important operational metrics.
+
+---
+
+# Stage 16 - Business wants analytics
+
+Sending notification isn't enough.
+
+Product Team asks
+
+```
+How many users opened it?
+
+How many clicked?
+
+How many purchased?
+```
+
+Need event tracking.
+
+---
+
+## Solution
+
+Analytics.
+
+Track
+
+```
+Sent
+
+↓
+
 Delivered
 
 ↓
@@ -1352,99 +1240,232 @@ Clicked
 Purchased
 ```
 
-Analytics uses this.
-
-Marketing improves campaigns.
+These metrics help improve engagement and marketing campaigns.
 
 ---
 
-# Final Architecture
+# Stage 17 - Final architecture
 
-Everything is now connected in one continuous pipeline.
+Now every concept comes together.
+
+```text
+                    Business Services
+        (Order, Billing, Marketing, etc.)
+                          │
+                          ▼
+                Notification API Servers
+        (Authentication + Validation + Rate Limit)
+                          │
+          ┌───────────────┼────────────────┐
+          │               │                │
+          ▼               ▼                ▼
+       Cache             Database     Notification Templates
+          │               │
+          └───────────────┘
+                  │
+                  ▼
+        Create Notification Event
+                  │
+                  ▼
+        Persist Notification Log
+                  │
+                  ▼
+      ┌───────────┼────────────┐
+      │           │            │
+      ▼           ▼            ▼
+ Push Queue    SMS Queue    Email Queue
+      │           │            │
+      ▼           ▼            ▼
+   Workers     Workers      Workers
+      │           │            │
+      ▼           ▼            ▼
+    APNS        Twilio      SendGrid
+      │           │            │
+      ▼           ▼            ▼
+   iPhone      Phone SMS      Email
+                  │
+                  ▼
+      Analytics & Monitoring
+```
+
+---
+
+# Stage 18 - How a notification actually travels
+
+Suppose your Amazon order is shipped.
 
 ```
-Business Services
+Order Shipped
+```
+
+↓
+
+Order Service generates event.
+
+↓
+
+Calls Notification API.
+
+↓
+
+Notification Server authenticates request.
+
+↓
+
+Checks user's notification settings.
+
+↓
+
+Fetches email, phone number and device tokens.
+
+↓
+
+Loads notification template.
+
+↓
+
+Creates final payload.
+
+↓
+
+Stores notification in Notification Log.
+
+↓
+
+Places notification into Push Queue.
+
+↓
+
+Worker reads Push Queue.
+
+↓
+
+Worker sends request to APNS.
+
+↓
+
+APNS delivers notification to iPhone.
+
+↓
+
+User's phone vibrates.
+
+↓
+
+App reports
+
+```
+Delivered
+```
+
+↓
+
+User opens notification.
+
+↓
+
+Analytics records
+
+```
+Opened
+```
+
+↓
+
+Business dashboard updates.
+
+---
+
+# The entire chapter in one picture
+
+```text
+Need notifications
         │
         ▼
-Notification API
+Business services send directly
+        │
+        ▼
+Too many notification channels
+        │
+        ▼
+Notification Service
+        │
+        ▼
+Need delivery providers
+(APNS / FCM / SMS / Email)
+        │
+        ▼
+Need user contact information
+        │
+        ▼
+Single Notification Server
+        │
+        ▼
+SPOF + Performance Bottleneck
+        │
+        ▼
+Multiple Notification Servers
+        │
+        ▼
+Servers block while sending
+        │
+        ▼
+Message Queues
+        │
+        ▼
+Need consumers
+        │
+        ▼
+Workers
+        │
+        ▼
+Workers can fail
+        │
+        ▼
+Notification Log (Persistence)
+        │
+        ▼
+Third-party failures
+        │
+        ▼
+Retry Mechanism
+        │
+        ▼
+Retries create duplicates
+        │
+        ▼
+Deduplication
+        │
+        ▼
+Millions of similar messages
+        │
+        ▼
+Notification Templates
+        │
+        ▼
+Users don't want every notification
+        │
+        ▼
+Notification Settings
+        │
+        ▼
+Still too many notifications
+        │
+        ▼
+Rate Limiting
+        │
+        ▼
+Need secure APIs
         │
         ▼
 Authentication
         │
         ▼
-Validation
+Need operational visibility
         │
         ▼
-Fetch User Information
-        │
-        ▼
-Fetch Notification Settings
-        │
-        ▼
-Load Notification Template
-        │
-        ▼
-Generate Notification Payload
-        │
-        ▼
-Persist Notification Log
-        │
-        ▼
-Apply Rate Limiting
-        │
-        ▼
-Publish to Channel Queue
-        │
-        ├──────── Push Queue
-        ├──────── SMS Queue
-        └──────── Email Queue
-                  │
-                  ▼
-              Workers
-                  │
-                  ▼
-Retry on Failure
-                  │
-                  ▼
-Third-party Providers
-(APNS / FCM / Twilio / SendGrid)
-                  │
-                  ▼
-User Devices
-                  │
-                  ▼
-Delivery Events
-                  │
-                  ▼
-Analytics & Monitoring
+Monitoring + Analytics
 ```
 
-# How every topic connects
-
-The chapter is not a collection of independent concepts. Each topic exists because the previous design exposed a limitation:
-
-1. **Business services generate events** → something needs to notify users.
-2. **Different channels (Push/SMS/Email)** → require a common notification service because each provider has different APIs.
-3. **Providers need destinations** → therefore collect and store user contact information and device tokens.
-4. **A single notification server works initially** → but creates SPOF, scaling issues, and performance bottlenecks.
-5. **To remove those bottlenecks** → separate storage, add multiple notification servers, caches, and asynchronous message queues.
-6. **Queues require consumers** → workers are introduced to process notifications independently and in parallel.
-7. **Distributed systems can fail** → add persistent notification logs so notifications are never lost.
-8. **Retries introduce duplicates** → add deduplication using notification/event IDs.
-9. **Generating every notification manually is inefficient** → introduce reusable notification templates.
-10. **Users may not want every notification** → store per-channel notification preferences and check them before sending.
-11. **Even opted-in users can be overwhelmed** → apply rate limiting to control notification frequency.
-12. **Third-party providers are unreliable** → implement retries and alerting for persistent failures.
-13. **Notification APIs could be abused** → protect them with authentication and authorization.
-14. **Queues can become backlogged** → monitor queue depth and scale workers horizontally when necessary.
-15. **Delivery is not enough for the business** → track opens, clicks, and engagement through analytics.
-
-Every improvement is driven by one of four fundamental distributed-system goals:
-
-* **Scalability** (horizontal notification servers, workers, queues, cache)
-* **Reliability** (persistent logs, retries, deduplication)
-* **Extensibility** (channel abstraction, templates, pluggable providers)
-* **Operational visibility** (monitoring, metrics, event tracking)
-
-That progression is the core design story of the chapter.
+This is the connecting thread that the book doesn't explicitly explain. Every concept is introduced because the previous solution exposes a limitation. Once you see the chapter as **Problem → Solution → New Problem**, the entire notification system becomes a single logical evolution rather than a list of unrelated components.
 
